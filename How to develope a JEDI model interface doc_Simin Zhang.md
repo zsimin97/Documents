@@ -1,4 +1,4 @@
-# Preface
+# 1.Preface
 
 If you are about to start developing a model interface **aaajedi** between **JEDI** and the **AAA model**, let’s assume the following prerequisites:
 
@@ -8,7 +8,15 @@ If you are about to start developing a model interface **aaajedi** between **JED
 
 3. The **interface repository** has been initialized with the basic `/cmake` files.
 
-# Basic Structure of the Interface Repository
+
+
+# 2.Basic Structure of the Interface Repository
+```
+├── cmake
+├── CMakeLists.txt
+├── src
+└── test
+```
 
 `/cmake`
 
@@ -51,7 +59,7 @@ Below is a brief description of the functionality of several fundamental classes
   
   - The **Increment** class represents the perturbation or delta relative to the state.
 
-- Since model variables may not directly correspond to observation variables, the **VariableChange** class is developed to handle this transformation.
+- Since model variables may not directly correspond to observation variables, the **VariableChange** and **LinearVariableChange** class is developed to handle this transformation. 
 
 ## Components of Each Class
 
@@ -76,15 +84,37 @@ This is the **basic structure** of each class, but not every class includes all 
 Typically, files **(1)** and **(5)** are the most critical, since the others mainly follow established conventions, while these two files vary substantially across models.  
 As references, **MPAS-JEDI** and **FV3-JEDI** provide complete and well-structured examples, whereas **OOPS/qg/model** offers a simpler design that is easier to understand function by function.
 
-# /src
 
-## CMakeLists.txt
+
+# 3./src
+```
+├── aaajedi
+├── CMakeLists.txt
+└── mains
+```
+
+## 3.1 CMakeLists.txt
 
 In the main `CMakeLists.txt`, include both the `/aaajedi` and `/mains` directories using the `add_subdirectory()` command.
 
-## /aaajedi
+## 3.2 /aaajedi
+```
+├── aaajedi
+   ├── CMakeLists.txt
+   ├── Fields
+   ├── Fortran.h
+   ├── Geometry
+   ├── GeometryIterator
+   ├── Increment
+   ├── LinearVariableChange
+   ├── ModelBias
+   ├── State
+   ├── Traits.h
+   ├── util
+   └── VariableChange
+```
 
-### CMakeLists.txt
+### 3.2.1 CMakeLists.txt
 
 - **List all files** under `/aaajedi`.
 
@@ -96,23 +126,19 @@ In the main `CMakeLists.txt`, include both the `/aaajedi` and `/mains` directori
 
 - ***Specify Fortran module output directories** for both build and install phases of the interface.
 
-### Traits.h
+### 3.2.2 Traits.h
 
 defines `namespace aaajedi { struct Traits { ... }; }`, which contains model-specific type aliases and constants used throughout the interface.
 
-### Fortran.h
+### 3.2.3 Fortran.h
 
 declares data types used for interoperability between Fortran and C++.
 
-
-
-
-
-### Geometry
+### 3.2.4 Geometry
 
 This is the first class to be developed, and it contains the **fundamental grid and mesh information** for the model.
 
-#### ATLAS
+#### 3.2.4.1 ATLAS
 
 In the JEDI–model interface, **ATLAS** is commonly used to handle geometry-related grid and mesh structures ([Atlas](https://sites.ecmwf.int/docs/atlas)) , a library designed for parallel data structures supporting unstructured grids and function spaces.  
 
@@ -120,13 +146,13 @@ ATLAS is primarily written in C++, but its main functionalities are accessible f
 
 Within the interface, ATLAS components such as `mpi_communicator`, `atlas_field`, `atlas_fieldset`, and `atlas_functionspace` are used.  The `mpi_communicator` encapsulates parallel communication operations (see https://mpitutorial.com/tutorials/).
 
-#### geom_mod.F90
+#### 3.2.4.2 geom_mod.F90
 
 In `geometry_mod.F90`, the geometry module defines a **geometry type** `geom_type`that stores the fundamental grid-point information, the foundation for all variable-related operations.   
 
 This module typically includes basic routines such as **`setup`**, **`clone`**, and **`delete`**. If the **ATLAS** library is used to construct the geometry, the `geom_type` can additionally include type(fckit_mpi_comm) :: f_comm and type(atlas_functionspace)  :: function_space. These components enable parallel communication and provide the underlying grid and function-space definitions used throughout the interface.
 
-#### Geometry.cc
+#### 3.2.4.3 Geometry.cc
 
 A key component of the `Geometry` class is its **constructor**, where the main initialization steps are implemented. The process generally includes:
 
@@ -148,29 +174,43 @@ The third step is the most complex and can be done in several ways:
   
   Each node must form either a **triangular** or **quadrilateral** element, and all this information must be stored and provided to the `MeshBuilder`.  This procedure is typically carried out within the `geom_get_coords_and_connectivities` function.
 
+Like in cam-jedi:
 
+```
+std::stringstream gridname;
+gridname << "L" << nlon << "x" <<nlat;
+atlas::RegularGrid grid(gridname.str());
+atlas::MeshGenerator generator("structured", mesh_options);
+atlas::Mesh mesh = generator.generate(grid);
+```
 
+#### 3.2.4.4 Geometry parallelization
 
+Since the model grid may have high resolution and the ensemble methods can lead to significant computational cost, parallelization of the geometry should be considered from the outset. When registering a unit test in `CMakeLists.txt`, one can specify, for example, `MPI 6` to set the number of ranks to 6; then the geometry would follow 6 ranks. The mesh generated as described above will have different partitions across different ranks. The number of owned nodes on each rank , i.e., `mesh.nodes().size()` , will be consistent across all ranks. Atlas tends to assign the polar regions to dedicated ranks first, such that the two poles each occupy one rank, with the remaining ranks evenly dividing the rest. To facilitate information exchange across partition boundaries, nodes at the edges of a partition may also include ghost nodes from neighboring partitions. That is, if there are 600 global grid nodes and `MPI = 6`, each rank will have 100 owned nodes. Then the number of ghost nodes on top of these 100 will vary depending on the geometry, it could be 110, 120, or some other number.
 
-### GeometryIterator
+On the other hand,  as shown in the cam-jedi `MeshGenerator` above, the `mesh_options` parameter is added to distinguish the number of ranks used by each ensemble member. In an ensemble application where, for example, 3 ensemble members and `MPI = 18` in the unit test:
+
+- Communicator 1 controls ranks 0–5
+- Communicator 2 controls ranks 6–11
+- Communicator 3 controls ranks 12–17
+
+Without the `mesh_options` parameter, the geometry would be initialized with all 18 ranks. By setting `mesh_options = 6`, Atlas can correctly interpret the configuration as 3 ensemble members each with 6 ranks, rather than generating the geometry with18 ranks.
+
+### 3.2.5 GeometryIterator
 
 responsible for looping through grid points; its implementation generally follows standard conventions.
 
-
-
-
-
-### Fields
+### 3.2.6 Fields
 
 The **Fields**, **State**, and **Increment** classes are closely related.  The **Fields** class defines the basic information and operations for model variables, serving as the foundation for handling all variables in the model.  The **State** class represents the model’s physical state, while the **Increment** class represents the perturbation (or delta) of those variables.
 
 In Fortran, the `State` and `Increment` types are **derived from** the `Fields` type.   Therefore, all fundamental variable-handling and arithmetic operations are implemented in the **Fields module**.  The **Fields module** itself only includes a Fortran file (`class_mod.F90`) and **cannot be directly accessed** by JEDI or OOPS.  Its functions are **overridden** by the `State` and `Increment` classes in their respective `class_interface_mod.F90` files, making them accessible to C++ through the interface layer.
 
-#### Type Field
+#### 3.2.6.1 Type Field
 
 Each variable can first be defined as an independent **field type**.  The specific information contained in each field may vary depending on the model’s grid structure and data storage format,  but at minimum it should include the **variable name** and its **data array**.
 
-#### Type Fields
+#### 3.2.6.2 Type Fields
 
 The **Fields type** is used to store all variables and often also includes a `Geometry` type or the total number of variables.  
 It can contain a wide range of functions for variable handling and operations, for example:
@@ -181,11 +221,31 @@ It can contain a wide range of functions for variable handling and operations, f
 
 - Performing arithmetic operations such as **add**, **schur product, rms**  and etc. computations
 
+#### 3.2.6.3 Scatter and Gather variables info
 
+Since the mesh is processed in parallel, the reading and writing of variables must also be parallelized. In cam-jedi, the `fields_read` subroutine reads data using only the rank 0 thread, which is then scattered to all ranks according to the parallelized mesh via `geom%afunctionspace%scatter`. Similarly, in the `fields_write` subroutine, all information is gathered to rank 0 via `self%geom%afunctionspace%gather`, and only the rank 0 data is written to file.
 
+> **Scatter Design**:
+> 
+> 1. temporary atlas_fieldset globalData created to own all variables atlas_field space
+> 
+> 2. temporary atlas_field f_global get the individual variable space from globalData
+> 
+> 3. f_global through pointer ptr_global read in corresponding variable values from the file
+> 
+> 4. f_global get all variables values, so globalData has all variables values
+> 
+> 5. call self%geom%afunctionspace%scatter(globalData, self%fieldset) to scatter the values from globalData to every rank in self%fieldset
 
+> **Gather Design**:
+> 
+> 1) temporary atlas_fieldset globalData created to own all variables atlas_field space
+> 
+> 2) call self%geom%afunctionspace%gather(self%fieldset, globalData) to gather the values from every rank in self%fieldset to globalData 
+> 
+> 3) write the globalData values into the file
 
-### State
+### 3.2.7 State
 
 The **State** class is responsible for handling **model variables** within the model interface.  It serves as the foundation for all subsequent variable operations and is therefore a **crucial component** of the interface. 
 
@@ -193,19 +253,11 @@ As mentioned earlier, the **State type** is derived from the **Fields type**.  I
 
 In `State.cc`, multiple **constructors** can be defined to accommodate different ways of creating a **State** object, depending on the specific use case or initialization method.
 
-
-
-
-
-### Increment
+### 3.2.8 Increment
 
 Its construction is similar to that of the **State** class, but it may include **additional model-specific functions**.
 
-
-
-
-
-### VariableChange
+### 3.2.9 VariableChange
 
 The variables contained in a model may not always correspond directly to those required by the observations.  This class is designed to perform the **conversion between model variables and observation variables**.
 
@@ -216,12 +268,10 @@ Within the `VariableChange` directory, there are typically main C++ files and se
 - The `/Base` directory contains `VariableChangeBase`, which defines the `VariableChangeBase` class, also including a `changeVar` function that provides the common interface.
 
 - The primary development work focuses on `/Model2GeoVaLs`, where the class `VarChaModel2GeoVaLs` inherits from `VariableChangeBase`.  Its core implementation is in the Fortran subroutine `changevar` within `model2geovals_mod.F90`. This subroutine takes a **State** object as input and produces another **State** object as output, the output state is the one passed to **GeoVaLs**.  The details of this transformation depend on the specific model and observation requirements.
+  
+  
 
-
-
-
-
-### Model
+### 3.2.10 Model
 
 This class is responsible for **driving the model forward** to complete the full data assimilation cycle.
 
@@ -231,36 +281,107 @@ This class is responsible for **driving the model forward** to complete the full
 
 - **`step`** or **`propagate`** advances the model forward by one time step
 
-For example, in **cam-jedi**, the model run is independent:
+However, in systems like cam-jedi, where **the model is not directly integrated into JEDI**, but instead runs model and JEDI separately with information exchanged via output files. The model component is instantiated through three placeholder classes: `ModelBias.h`, `ModelBiasCovariance.h`, and `ModelBiasIncrement.h`. These are declared in `Traits` as: 
 
-- The **`setup`** function configures relevant parameters.
-
-- The **`initialize`** function creates the CESM case (including `./case.create`, `setup`, and `build`).
-
-- The **`propagate`** function runs the model forward for one time step (`./case.submit`).
-
-
+```
+typedef camjedi::ModelBias           ModelAuxControl;
+typedef camjedi::ModelBiasIncrement  ModelAuxIncrement;
+typedef camjedi::ModelBiasCovariance ModelAuxCovariance;
+```
 
 
 
-# /test
+### 3.2.11 LinearVariableChange
 
-## CMakeList.txt
+This class is required when using the 4DVAR method. However, it is also needed when implementing the `LocalEnsembleDA.h` application (for example, LETKF), at minimum as a placeholder.
+
+
+
+## 3.3 mains
+```
+└── mains
+ ├── aaajediEnsHofX.cc
+ ├── aaajediHofX.cc
+ ├── aaajediLETKF.cc
+ └── CMakeLists.txt
+```
+
+This is where the magic starts. By registering an executable following the similar pattern as other model interfaces, further applications can be built upon it. Taking `camjediHofX.cc` as an example:
+
+```
+#include "camjedi/Traits.h"
+#include "oops/runs/HofX3D.h"
+#include "oops/runs/Run.h"
+#include "ufo/instantiateObsFilterFactory.h"
+#include "ufo/ObsTraits.h"
+
+int main(int argc,  char ** argv) {
+  oops::Run run(argc, argv);
+  ufo::instantiateObsFilterFactory();
+  oops::HofX3D<camjedi::Traits, ufo::ObsTraits> hofx;
+  return run.execute(hofx);
+}
+```
+
+The necessary header files must be included, along with `oops/runs/HofX3D.h`, which is the key to this application and indicates that it is a HofX3D application. The main function is then modified accordingly following the standard format.
+
+Next, register the executable in `CMakeLists.txt` under `mains`:
+
+```
+ecbuild_add_executable( TARGET  camjedi_hofx.x
+                        SOURCES camjediHofX.cc
+                        LIBS    camjedi
+                       )
+```
+
+At this point, the model interface can be built again under `jedi-bundle`. If successful, the `.x` file ecbuild here will appear in the `build/bin` directory. This executable can then be used to register unit tests.
+
+
+
+# 4 /test
+```
+├── CMakeLists.txt
+├── cpplint.py
+├── executables
+├── modelinput
+└── testinput
+```
+
+## 4.1 CMakeList.txt
 
 Includes all files under this directory and is used to **register the ctests**.
 
-## executables
+For standard unit tests included in OOPS, register them as follows. This indicates the use of test files from `test/executables`but finally point to `OOPS/test`, with a yaml input file specified and `MPI = 6` set.
 
-Contains the **executable files** used to test each class.
+```OOPS unit test
+ecbuild_add_test( TARGET  test_camjedi_geometry
+                  SOURCES executables/TestGeometry.cc
+                  ARGS    "testinput/geometry.yaml"
+		          LIBS    camjedi 
+		          MPI 6)
+```
 
-## testinput
+For application tests that require an executable, register them as follows. This example runs the `camjedi_hofx.x` application generated under `src/mains`, and different yaml input files can be used accordingly.
+
+```
+ecbuild_add_test(TARGET   camjedi_hofx_nomodel
+	             MPI      6
+	             ARGS     "testinput/hofx_nomodel.yaml"
+	             COMMAND  camjedi_hofx.x)
+```
+
+## 4.2 executables
+
+Contains the **executable files** used to test each class. These are in fact empty registrations and the actual test code resides in `OOPS/test`.
+
+## 4.3 testinput
 
 Contains the **YAML configuration files** used for testing.  You can verify YAML file formatting using [https://yamlchecker.com/](https://yamlchecker.com/).
 
-## testdata
-
-Contains the **data files** required for running the tests.
-
-## modelinput
+## 4.4 modelinput
 
 Can be used to store **additional input files** for the model.
+
+## 4.5 testdata
+
+Contains the **data files** required for running the tests. The actual data should not be uploaded to GitHub, but instead stored in a separate data repository and loaded in the `CMakeLists.txt` of `jedi-bundle`.
