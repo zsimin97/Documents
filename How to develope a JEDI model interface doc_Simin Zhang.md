@@ -22,17 +22,17 @@ If you are about to start developing a model interface **aaajedi** between **JED
 
 `/src`
 
-​       `/aaajedi`    – contains the interface classes; this is where you will do most of your development
+​       `src/aaajedi`    – contains the interface classes; this is where you will do most of your development
 
-​​​       `/mains`      – contains `.cc` files for building application ctests
+​​​       `src/mains`      – contains `.cc` files for building application ctests
 
 `/test`
 
-​       `/testinput`    – YAML files used as input during ctests
+​       `test/testinput`    – YAML files used as input during ctests
 
-​       `/main` or `/executables`     – `.cc` files for interface class ctests
+​       `test/executables`    – registration files for interface class ctests
 
-​       `/testdata`     – model or observation files required when running ctests
+​       `test/testdata`     – model or observation files required when running ctests
 
 The **interface repository** consists of two main parts: `/src` and `/test`.  
 
